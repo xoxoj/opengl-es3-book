@@ -179,7 +179,7 @@ void Draw ( ESContext *esContext )
    glActiveTexture ( GL_TEXTURE0 );
    glBindTexture ( GL_TEXTURE_2D, userData->baseMapTexId );
 
-   // Set the base map sampler to texture unit to 0
+   // Set the base map sampler to texture unit 0
    glUniform1i ( userData->baseMapLoc, 0 );
 
    // Bind the light map

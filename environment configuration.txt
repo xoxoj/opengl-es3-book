@@ -1,0 +1,2 @@
+C:\Program Files\ARM\Mali Developer Tools\Mali OpenGL ES Emulator 3.0.1.g72cc2\libGLESv2.lib
+C:\Program Files\ARM\Mali Developer Tools\Mali OpenGL ES Emulator 3.0.1.g72cc2\libEGL.lib

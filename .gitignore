@@ -8,7 +8,8 @@ profile
 
 DerivedData/
 build/
-
+!build/*/*/*.cpp
+!build/*/*/*.h
 
 
 *.pbxuser

@@ -41,6 +41,8 @@
 #include <opencv2/highgui/highgui.hpp>
 #include <FaceData.h>
 #include <VisageFeaturesDetector.h>
+#include <iostream>
+#include <math.h>
 
 using namespace VisageSDK;
 namespace VisageSDK
@@ -64,7 +66,7 @@ int featureDetect( IplImage *image, float* fLoc ) {
 	int n_faces = detector_->detectFacialFeatures( (VsImage*)image, data, MAX_FACE_NUM );
 
 	if (n_faces > 0) {
-		fNum = 8;
+		fNum = 14;
 		VisageSDK::FeaturePoint *fp; VisageSDK::FDP *fdp = data[0].featurePoints2D;
 		if (data[0].eyeClosure[0]) {
 			fp = const_cast<VisageSDK::FeaturePoint*>(&fdp->getFP( 3, 5 ));
@@ -102,48 +104,20 @@ int featureDetect( IplImage *image, float* fLoc ) {
 				fLoc[3] = 0.0f;
 			}
 		}
-		// right-upper point
-		fp = const_cast<VisageSDK::FeaturePoint*>(&fdp->getFP( 13, 10 ));
-		if (fp->defined) { fLoc[4] = fp->pos[0]; fLoc[5] = 1 - fp->pos[1]; }
-		else { fLoc[4] = 0.0f; fLoc[5] = 0.0f; }
-		// right-middle point
-		fp = const_cast<VisageSDK::FeaturePoint*>(&fdp->getFP( 13, 14 ));
-		if (fp->defined) { fLoc[6] = fp->pos[0]; fLoc[7] = 1 - fp->pos[1]; }
-		else { fLoc[6] = 0.0f; fLoc[7] = 0.0f; }
-		// chin point
-		fp = const_cast<VisageSDK::FeaturePoint*>(&fdp->getFP( 13, 17 ));
-		if (fp->defined) { fLoc[8] = fp->pos[0]; fLoc[9] = 1 - fp->pos[1]; }
-		else { fLoc[8] = 0.0f; fLoc[9] = 0.0f; }
-
-		// left-middle point
-		fp = const_cast<VisageSDK::FeaturePoint*>(&fdp->getFP( 13, 13 ));
-		if (fp->defined) { fLoc[10] = fp->pos[0]; fLoc[11] = 1 - fp->pos[1]; }
-		else { fLoc[10] = 0.0f; fLoc[11] = 0.0f; }
-		
-		// left-upper point
-		fp = const_cast<VisageSDK::FeaturePoint*>(&fdp->getFP( 13, 9 ));
-		if (fp->defined) { fLoc[12] = fp->pos[0]; fLoc[13] = 1 - fp->pos[1]; }
-		else { fLoc[12] = 0.0f; fLoc[13] = 0.0f; }
-
-		// nose-tip point
-		fp = const_cast<VisageSDK::FeaturePoint*>(&fdp->getFP( 9, 3 ));
-		if (fp->defined) { fLoc[14] = fp->pos[0]; fLoc[15] = 1 - fp->pos[1]; }
-		else { fLoc[14] = 0.0f; fLoc[15] = 0.0f; }
-
 		static int indices[] = {
-			13,10,	13,14,	2,1,	13,13,	13,9,
-			14,3,	14,4,	9,3,	9,12,	8,3,
-			8,4,	8,1,	8,2,	13,3,	13,4,
-			13,5,	13,6,	13,7,	13,8,	13,11,
-			13,12,	13,15,	13,16
+			13,12,	13,14,	2,1,	13,13,	13,11,
+			9,3,	8,1,	8,2,	13,3,	13,4,
+			13,5,	13,6
 		};
-		int num = sizeof( indices ) / sizeof( int ) / 2;
+		int num = sizeof( indices ) / sizeof( int );
 		for (int i = 0; i < num; ++i,++i) {
 			fp = const_cast<VisageSDK::FeaturePoint*>(&fdp->getFP( indices[i], indices[i+1] ));
 			if (fp->defined) { fLoc[i+4] = fp->pos[0]; fLoc[i+5] = 1 - fp->pos[1]; }
 			else { fLoc[i+4] = 0.0f; fLoc[i+5] = 0.0f; }
 		}
-		
+		for (int i = 0; i < num+4; ++i, ++i) {
+			printf( "x = %.6f, y = %.6f.\n", fLoc[i], fLoc[i + 1] );
+		}
 	}
 	delete detector_; detector_ = 0; return fNum;
 }
@@ -164,9 +138,14 @@ extern "C" {
 
 		// Sampler locations
 		GLint baseMapLoc;
+		GLint backMapLoc;
+		GLint fluidMapLoc;
+		GLint fluidUvOffsetLoc;
 
 		// Texture handle
 		GLuint baseMapTexId;
+		GLuint backMapTexId;
+		GLuint fluidMapTexId;
 
 		GLint texelWidthOffsetLoc;
 		GLint texelHeightOffsetLoc;
@@ -263,6 +242,63 @@ extern "C" {
 		return texId;
 	}
 
+	///
+	// Load texture from disk
+	//
+	GLuint LoadTextureImageString( void *ioContext, const char* filename )
+	{
+		int width, height;
+
+		IplImage *image;
+		image = cvLoadImage( filename, CV_LOAD_IMAGE_UNCHANGED );
+		if (!image) { printf( "Load image:%s failure.\n", filename ); getchar( ); return 0; }
+
+		cv::Mat mat = cv::cvarrToMat( image, false );
+		//cv::imshow( "background image", mat ); cv::waitKey( 0 );
+		if (mat.channels( ) == 3) {
+			cvtColor( mat, mat, CV_BGR2RGB );
+		}
+		//std::cout << mat.colRange( 10,13 ).rowRange( 10,13 ) << std::endl;
+		uchar* buffer = mat.data;
+		width = mat.cols; height = mat.rows;
+		int rowLen = mat.step / mat.elemSize( );
+		int align = mat.step & 3;
+		glPixelStorei( GL_PACK_ALIGNMENT, (mat.step & 3) ? 1 : 4 );
+		glPixelStorei( GL_PACK_ROW_LENGTH, mat.step / mat.elemSize( ) );
+
+		GLuint texId;
+
+		if (buffer == NULL)
+		{
+			esLogMessage( "Error loading (%s) image.\n" );
+			return 0;
+		}
+
+		glGenTextures( 1, &texId );
+		glBindTexture( GL_TEXTURE_2D, texId );
+		if (mat.channels( ) == 4) {
+			glTexImage2D( GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, buffer );
+		}
+		else if (mat.channels( ) == 3) {
+			glTexImage2D( GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, buffer );
+		}
+		else if (mat.channels( ) == 1) {
+			glTexImage2D( GL_TEXTURE_2D, 0, GL_LUMINANCE, width, height, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, buffer );
+		}
+		else {
+			printf( "Unknowned image type.\n" );
+		}
+		glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
+		glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
+		glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
+		glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
+
+		glBindTexture( GL_TEXTURE_2D, 0 );
+
+		cvReleaseImage( &image );
+
+		return texId;
+	}
 
 	///
 	// Initialize the shader and program object
@@ -712,20 +748,19 @@ extern "C" {
 			"	vec2 nose = vec2( p_nose.x * x_a, p_nose.y * y_a );					\n"
 			"	vec2 chin = vec2( p_chin.x * x_a, p_chin.y * y_a );					\n"
 			"																		\n"
-			"	vec2 chinCenter = nose + (chin - nose) * 0.7;						\n"
+			"	vec2 chinCenter = nose + (chin - nose) * 0.8;						\n"
 			"																		\n"
-			"	float weight = 0.0;													\n"
 			"	float face_width = distance( eyea, eyeb );							\n"
 			"																		\n"
 			"	float radius = face_width*1.0;										\n"
 			"	vec2 leftF = faceleft;												\n"
-			"	vec2 targetleftF = nose + (leftF - nose) * 0.99;					\n"
+			"	vec2 targetleftF = nose + (leftF - nose) * 0.9;					\n"
 			"	vec2 leftFplus = vec2( 0.0 );										\n"
 			"	leftFplus = faceStretch( newCoord, leftF, targetleftF, radius, 1.0 );	\n"
 			"	newCoord = newCoord - leftFplus;										\n"
 			"																			\n"
 			"	vec2 rightF = faceright;												\n"
-			"	vec2 targetrightF = nose + (rightF - nose) * 0.99;						\n"
+			"	vec2 targetrightF = nose + (rightF - nose) * 0.9;						\n"
 			"	vec2 rightFplus = vec2( 0.0 );											\n"
 			"	rightFplus = faceStretch( newCoord, rightF, targetrightF, radius, 1.0 );\n"
 			"	newCoord = newCoord - rightFplus;										\n"
@@ -781,15 +816,14 @@ extern "C" {
 			"	gl_Position = position;				\n"
 			"	textureCoordinate = inputTextureCoordinate;		\n"
 			"}										\n";
-#if 1
 		char fShaderStr[] =
 			"#version 300 es                                    \n"
-			"precision lowp float;\n"
-			"in highp vec2 textureCoordinate;\n"
-			"\n"
-			"uniform sampler2D inputImageTexture;\n"
-			"\n"
-			"uniform lowp vec2 points[25];\n"
+			"precision highp float;								\n"
+			"in highp vec2 textureCoordinate;					\n"
+			"layout(location = 0) out vec4 outColor;            \n"
+			"uniform sampler2D inputImageTexture;				\n"
+			"								\n"
+			"uniform highp vec2 points[14];\n"
 			"\n"
 			"vec2 faceStretch( vec2 textureCoord, vec2 originPosition, vec2 targetPosition, float radius, float amp, float curve )	\n"
 			"{	\n"
@@ -800,198 +834,97 @@ extern "C" {
 			"	float infect = distance( textureCoord, originPosition ) / radius;	\n"
 			"	infect = clamp( 1.0 - infect, 0.0, 1.0 );	\n"
 			"	infect = pow( infect, curve );	\n"
-			"	\n"
 			"	return direction * infect;	\n"
 			"}	\n"
 			"	\n"
 			"void main( ) {	\n"
-			"	gl_FragColor = texture2D( inputImageTexture, textureCoordinate );	\n"
+			"	outColor = texture( inputImageTexture, textureCoordinate );	\n"
 			"	\n"
+			"	highp vec2 location0 = points[0]; // p_eyeRight	\n"
+			"	highp vec2 location1 = points[1]; // p_eyeLeft	\n"
 			"	if (location0.x < 0.01 && location1.x < 0.01)	\n"
 			"	{	\n"
-			"		gl_FragColor = texture2D( inputImageTexture, textureCoordinate );	\n"
+			"		outColor = texture( inputImageTexture, textureCoordinate );	\n"
 			"		return;	\n"
 			"	}	\n"
 			"	\n"
-			"	lowp vec2 location0 = points[0]; // p_eyeRight	\n"
-			"	lowp vec2 location1 = points[1]; // p_eyeLeft	\n"
-			"	lowp vec2 location2 = points[2]; // p_browRight	\n"
-			"	lowp vec2 location3 = points[3]; // p_browLeft	\n"
-			"	lowp vec2 location4 = points[4]; // p_noseTip	\n"
-			"	lowp vec2 location5 = points[5]; // p_noseLeg	\n"
-			"	lowp vec2 location6 = points[6]; // p_mouthRight	\n"
-			"	lowp vec2 location7 = points[7]; // p_mouthLeft	\n"
-			"	lowp vec2 location8 = points[8]; // p_mouthTop	\n"
-			"	lowp vec2 location9 = points[9]; // p_mouthBottom	\n"
-			"	lowp vec2 location10 = points[10];// p_chin	\n"
-			"	lowp vec2 location11 = points[11];// p_faceRight1	\n"
-			"	lowp vec2 location12 = points[12];// p_faceLeft1	\n"
-			"	lowp vec2 location13 = points[13];// p_faceRight2	\n"
-			"	lowp vec2 location14 = points[14];// p_faceLeft2	\n"
-			"	lowp vec2 location15 = points[15];// p_faceRight3	\n"
-			"	lowp vec2 location16 = points[16];// p_faceLeft3	\n"
-			"	lowp vec2 location17 = points[17];// p_faceRight4	\n"
-			"	lowp vec2 location18 = points[18];// p_faceLeft4	\n"
-			"	lowp vec2 location19 = points[19];// p_faceRight5	\n"
-			"	lowp vec2 location20 = points[20];// p_faceLeft5	\n"
-			"	lowp vec2 location21 = points[21];// p_faceRight6	\n"
-			"	lowp vec2 location22 = points[22];// p_faceLeft6	\n"
-			"	lowp vec2 location23 = points[23];// p_faceRight7	\n"
-			"	lowp vec2 location24 = points[24];// p_faceLeft7	\n"
+			"	highp vec2 location4 = points[7]; // p_noseTip	\n"
+			"	highp vec2 location8 = points[8]; // p_mouthTop	\n"
+			"	highp vec2 location9 = points[9]; // p_mouthBottom	\n"
+			"	highp vec2 location10 = points[4];// p_chin	\n"
+			"	highp vec2 location11 = points[10];// p_faceRight1	\n"
+			"	highp vec2 location12 = points[11];// p_faceLeft1	\n"
+			"	highp vec2 location13 = points[12];// p_faceRight2	\n"
+			"	highp vec2 location14 = points[13];// p_faceLeft2	\n"
+			"	highp vec2 location17 = points[6];// p_faceRight4	\n"
+			"	highp vec2 location18 = points[2];// p_faceLeft4	\n"
+			"	highp vec2 location21 = points[5];// p_faceRight6	\n"
+			"	highp vec2 location22 = points[3];// p_faceLeft6	\n"
 			"	\n"
-			"	float x_axis = 720.0;	\n"
-			"	float y_axis = 1280.0;	\n"
+			"	float x_axis = 0.72;	\n"
+			"	float y_axis = 1.28;	\n"
 			"	\n"
 			"	highp vec2 textureCoord = vec2( textureCoordinate.x * x_axis, textureCoordinate.y * y_axis );	\n"
 			"	\n"
 			"	//==========	\n"
 			"	float faceWidth = distance( vec2( location0.x * x_axis, location0.y * y_axis ), vec2( location1.x * x_axis, location1.y * y_axis ) );	\n"
 			"	vec2 centerPoint = vec2( location9.x * x_axis, location9.y * y_axis );	\n"
-			"	vec2 centerPoint2 = vec2( location8.x * x_axis, location8.y * y_axis );	\n"
 			"	\n"
-			"	vec2 targetLeft = vec2( location12.x * x_axis, location10.y * y_axis );	\n"
-			"	vec2 targetRight = vec2( location11.x * x_axis, location10.y * y_axis );	\n"
+			"	vec2 targetLeft = vec2( location12.x * x_axis, location12.y * y_axis );	\n"
+			"	vec2 targetRight = vec2( location11.x * x_axis, location11.y * y_axis );	\n"
 			"	\n"
-			"	vec2 targetLeft0 = vec2( location12.x * x_axis, location10.y * y_axis );	\n"
-			"	vec2 targetRight0 = vec2( location11.x * x_axis, location10.y * y_axis );	\n"
-			"	float radius = 100.0;	\n"
+			"	float radius = 0.0;	\n"
 			"	float amp = 1.0;	\n"
 			"	\n"
+			"	// 13,12	\n"
 			"	radius = faceWidth*1.5;	\n"
 			"	vec2 faceLeft5 = vec2( location18.x*x_axis, location18.y*y_axis );	\n"
-			"	targetLeft = centerPoint + (faceLeft5 - centerPoint) * 0.8;	\n"
+			"	targetLeft = centerPoint + (faceLeft5 - centerPoint) * 0.85;	\n"
 			"	vec2 vectorfaceLeft5 = faceStretch( textureCoord, faceLeft5, targetLeft, radius, amp, 2.0 );	\n"
+			"	// 13,11	\n"
 			"	vec2 faceRight5 = vec2( location17.x*x_axis, location17.y*y_axis );	\n"
-			"	targetRight = centerPoint + (faceRight5 - centerPoint) * 0.8;	\n"
+			"	targetRight = centerPoint + (faceRight5 - centerPoint) * 0.85;	\n"
 			"	vec2 vectorfaceRight5 = faceStretch( textureCoord, faceRight5, targetRight, radius, amp, 2.0 );	\n"
-			"	\n"
+			"	// 13,6		\n"
+			"	radius = faceWidth*1.1;	\n"
 			"	vec2 faceLeft54 = vec2( location14.x*x_axis, location14.y*y_axis );	\n"
 			"	targetLeft = centerPoint + (faceLeft54 - centerPoint) * 0.93;	\n"
-			"	vec2 vectorfaceLeft54 = faceStretch( textureCoord, faceLeft54, targetLeft, radius, amp, 2.0 );	\n"
+			"	vec2 vectorfaceLeft54 = faceStretch( textureCoord, faceLeft54, targetLeft, radius, amp, 1.0 );	\n"
+			"	// 13,5		\n"
 			"	vec2 faceRight54 = vec2( location13.x*x_axis, location13.y*y_axis );	\n"
 			"	targetRight = centerPoint + (faceRight54 - centerPoint) * 0.93;	\n"
-			"	vec2 vectorfaceRight54 = faceStretch( textureCoord, faceRight54, targetRight, radius, amp, 2.0 );	\n"
-			"	\n"
+			"	vec2 vectorfaceRight54 = faceStretch( textureCoord, faceRight54, targetRight, radius, amp, 1.0 );	\n"
+			"	// 2,1		\n"
 			"	radius = faceWidth*1.0;	\n"
 			"	vec2 chin = vec2( location10.x * x_axis, location10.y * y_axis );	\n"
-			"	vec2 targetchin = centerPoint + (chin - centerPoint) * 1.1;	\n"
+			"	vec2 targetchin = centerPoint + (chin - centerPoint) * 1.03;	\n"
 			"	vec2 chinplus = faceStretch( textureCoord, chin, targetchin, radius, amp, 2.0 );	\n"
-			"	\n"
+			"	// 13,14			\n"
 			"	radius = faceWidth*1.3;	\n"
 			"	vec2 faceLeftplus7 = vec2( location22.x*x_axis, location22.y*y_axis );	\n"
 			"	targetLeft = centerPoint + (faceLeftplus7 - centerPoint) * 0.9;	\n"
 			"	vec2 vectorfaceLeftplus7 = faceStretch( textureCoord, faceLeftplus7, targetLeft, radius, amp, 2.0 );	\n"
+			"	// 13,13			\n"
 			"	vec2 faceRightplus7 = vec2( location21.x*x_axis, location21.y*y_axis );	\n"
 			"	targetRight = centerPoint + (faceRightplus7 - centerPoint) * 0.9;	\n"
 			"	vec2 vectorfaceRightplus7 = faceStretch( textureCoord, faceRightplus7, targetRight, radius, amp, 2.0 );	\n"
-			"	\n"
-			"	radius = faceWidth*1.2;	\n"
-			"	vec2 faceLeftplus8 = vec2( location1.x*x_axis, location1.y*y_axis );	\n"
-			"	vec2 faceLeftplus9 = centerPoint2 + (faceLeftplus8 - centerPoint2) * 2.2;	\n"
-			"	targetLeft = centerPoint2 + (faceLeftplus8 - centerPoint2) * 2.4;	\n"
-			"	vec2 vectorfaceLeftplus9 = faceStretch( textureCoord, faceLeftplus9, targetLeft, radius, amp, 2.0 );	\n"
-			"	vec2 faceRightplus8 = vec2( location0.x*x_axis, location0.y*y_axis );	\n"
-			"	vec2 faceRightplus9 = centerPoint2 + (faceRightplus8 - centerPoint2) * 2.2;	\n"
-			"	targetRight = centerPoint2 + (faceRightplus8 - centerPoint2) * 2.4;	\n"
-			"	vec2 vectorfaceRightplus9 = faceStretch( textureCoord, faceRightplus9, targetRight, radius, amp, 2.0 );	\n"
-			"	\n"
-			"	//==========	\n"
+			"	// bigger left eye ==========	\n"
 			"	radius = faceWidth*0.13;	\n"
 			"	float a = 1.2;	\n"
 			"	vec2 diffusePosition = vec2( location0.x*x_axis, location0.y*y_axis );	\n"
 			"	float infect3 = distance( textureCoord, diffusePosition ) / radius;	\n"
 			"	infect3 = clamp( infect3, 0.0, 1.0 );	\n"
 			"	infect3 = a * infect3 * (infect3 - 1.0) + 1.0;	\n"
-			"	//==========	\n"
+			"	// bigger right eye ==========	\n"
 			"	vec2 diffusePosition2 = vec2( location1.x*x_axis, location1.y*y_axis );	\n"
 			"	float infect4 = distance( textureCoord, diffusePosition2 ) / radius;	\n"
 			"	infect4 = clamp( infect4, 0.0, 1.0 );	\n"
 			"	infect4 = a * infect4 * (infect4 - 1.0) + 1.0;	\n"
-			"	//==========	\n"
-			"	\n"
 			"	//====================================	\n"
-			"	vec2 textureCoord_new = textureCoord - vectorfaceLeft5;	\n"
-			"	textureCoord_new = textureCoord_new - vectorfaceRight5;	\n"
-			"	textureCoord_new = textureCoord_new - chinplus;	\n"
+			"	highp vec2 textureCoord_new = textureCoord;	\n"
 			"	\n"
-			"	textureCoord_new = textureCoord_new - vectorfaceLeft54;	\n"
-			"	textureCoord_new = textureCoord_new - vectorfaceRight54;	\n"
-			"	\n"
-			"	textureCoord_new = textureCoord_new - vectorfaceLeftplus7;	\n"
-			"	textureCoord_new = textureCoord_new - vectorfaceRightplus7;	\n"
-			"	\n"
-			"	textureCoord_new = diffusePosition + (textureCoord_new - diffusePosition)*infect3;	\n"
-			"	textureCoord_new = diffusePosition2 + (textureCoord_new - diffusePosition2)*infect4;	\n"
-			"	\n"
-			"	//====================================	\n"
-			"	if (location0.x > 0.01 && location1.x > 0.01)	\n"
-			"	{	\n"
-			"	//==========	\n"
-			"		float faceWidth = distance( vec2( location0.x * x_axis, location0.y * y_axis ), vec2( location1.x * x_axis, location1.y * y_axis ) );	\n"
-			"		vec2 centerPoint = vec2( position9.x * x_axis, position9.y * y_axis );	\n"
-			"		vec2 centerPoint2 = vec2( position8.x * x_axis, position8.y * y_axis );	\n"
-			"	\n"
-			"		vec2 targetLeft = vec2( position12.x * x_axis, position10.y * y_axis );	\n"
-			"		vec2 targetRight = vec2( position11.x * x_axis, position10.y * y_axis );	\n"
-			"	\n"
-			"		vec2 targetLeft0 = vec2( position12.x * x_axis, position10.y * y_axis );	\n"
-			"		vec2 targetRight0 = vec2( position11.x * x_axis, position10.y * y_axis );	\n"
-			"		float radius = 100.0;	\n"
-			"		float amp = 1.0;	\n"
-			"	\n"
-			"		radius = faceWidth*1.5;	\n"
-			"		vec2 faceLeft5 = vec2( position18.x*x_axis, position18.y*y_axis );	\n"
-			"		targetLeft = centerPoint + (faceLeft5 - centerPoint) * 0.8;	\n"
-			"		vec2 vectorfaceLeft5 = faceStretch( textureCoord, faceLeft5, targetLeft, radius, amp, 2.0 );	\n"
-			"		vec2 faceRight5 = vec2( position17.x*x_axis, position17.y*y_axis );	\n"
-			"		targetRight = centerPoint + (faceRight5 - centerPoint) * 0.8;	\n"
-			"		vec2 vectorfaceRight5 = faceStretch( textureCoord, faceRight5, targetRight, radius, amp, 2.0 );	\n"
-			"	\n"
-			"		vec2 faceLeft54 = vec2( position14.x*x_axis, position14.y*y_axis );	\n"
-			"		targetLeft = centerPoint + (faceLeft54 - centerPoint) * 0.93;	\n"
-			"		vec2 vectorfaceLeft54 = faceStretch( textureCoord, faceLeft54, targetLeft, radius, amp, 2.0 );	\n"
-			"		vec2 faceRight54 = vec2( position13.x*x_axis, position13.y*y_axis );	\n"
-			"		targetRight = centerPoint + (faceRight54 - centerPoint) * 0.93;	\n"
-			"		vec2 vectorfaceRight54 = faceStretch( textureCoord, faceRight54, targetRight, radius, amp, 2.0 );	\n"
-			"	\n"
-			"		radius = faceWidth*1.0;	\n"
-			"		vec2 chin = vec2( position10.x * x_axis, position10.y * y_axis );	\n"
-			"		vec2 targetchin = centerPoint + (chin - centerPoint) * 1.1;	\n"
-			"		vec2 chinplus = faceStretch( textureCoord, chin, targetchin, radius, amp, 2.0 );	\n"
-			"	\n"
-			"		radius = faceWidth*1.3;	\n"
-			"		vec2 faceLeftplus7 = vec2( position22.x*x_axis, position22.y*y_axis );	\n"
-			"		targetLeft = centerPoint + (faceLeftplus7 - centerPoint) * 0.9;	\n"
-			"		vec2 vectorfaceLeftplus7 = faceStretch( textureCoord, faceLeftplus7, targetLeft, radius, amp, 2.0 );	\n"
-			"		vec2 faceRightplus7 = vec2( position21.x*x_axis, position21.y*y_axis );	\n"
-			"		targetRight = centerPoint + (faceRightplus7 - centerPoint) * 0.9;	\n"
-			"		vec2 vectorfaceRightplus7 = faceStretch( textureCoord, faceRightplus7, targetRight, radius, amp, 2.0 );	\n"
-			"	\n"
-			"		radius = faceWidth*1.2;	\n"
-			"		vec2 faceLeftplus8 = vec2( location1.x*x_axis, location1.y*y_axis );	\n"
-			"		vec2 faceLeftplus9 = centerPoint2 + (faceLeftplus8 - centerPoint2) * 2.2;	\n"
-			"		targetLeft = centerPoint2 + (faceLeftplus8 - centerPoint2) * 2.4;	\n"
-			"		vec2 vectorfaceLeftplus9 = faceStretch( textureCoord, faceLeftplus9, targetLeft, radius, amp, 2.0 );	\n"
-			"		vec2 faceRightplus8 = vec2( location0.x*x_axis, location0.y*y_axis );	\n"
-			"		vec2 faceRightplus9 = centerPoint2 + (faceRightplus8 - centerPoint2) * 2.2;	\n"
-			"		targetRight = centerPoint2 + (faceRightplus8 - centerPoint2) * 2.4;	\n"
-			"		vec2 vectorfaceRightplus9 = faceStretch( textureCoord, faceRightplus9, targetRight, radius, amp, 2.0 );	\n"
-			"	\n"
-			"		//==========	\n"
-			"		radius = faceWidth*0.13;	\n"
-			"		float a = 1.2;	\n"
-			"		vec2 diffusePosition = vec2( location0.x*x_axis, location0.y*y_axis );	\n"
-			"		float infect3 = distance( textureCoord, diffusePosition ) / radius;	\n"
-			"		infect3 = clamp( infect3, 0.0, 1.0 );	\n"
-			"		infect3 = a * infect3 * (infect3 - 1.0) + 1.0;	\n"
-			"		//==========	\n"
-			"		vec2 diffusePosition2 = vec2( location1.x*x_axis, location1.y*y_axis );	\n"
-			"		float infect4 = distance( textureCoord, diffusePosition2 ) / radius;	\n"
-			"		infect4 = clamp( infect4, 0.0, 1.0 );	\n"
-			"		infect4 = a * infect4 * (infect4 - 1.0) + 1.0;	\n"
-			"		//==========	\n"
-			"	\n"
-			"	//====================================	\n"
+			//"	vec2 sum = vectorfaceLeft5 + vectorfaceRight5 + chinplus + vectorfaceLeft54 + vectorfaceRight54;	\n"
+			//"	sum = sum + vectorfaceLeftplus7 + vectorfaceRightplus7;	\n"
 			"	textureCoord_new = textureCoord_new - vectorfaceLeft5;	\n"
 			"	textureCoord_new = textureCoord_new - vectorfaceRight5;	\n"
 			"	textureCoord_new = textureCoord_new - chinplus;	\n"
@@ -1004,13 +937,10 @@ extern "C" {
 			"	\n"
 			"	textureCoord_new = diffusePosition + (textureCoord_new - diffusePosition)*infect3;	\n"
 			"	textureCoord_new = diffusePosition2 + (textureCoord_new - diffusePosition2)*infect4;	\n"
-			"	//====================================	\n"
-			"	}	\n"
 			"	\n"
-			"	vec2 coordUse = vec2( textureCoord_new.x / x_axis, textureCoord_new.y / y_axis );	\n"
-			"	gl_FragColor = texture2D( inputImageTexture, coordUse );	\n"
+			"	highp vec2 coordUse = vec2( textureCoord_new.x / x_axis, textureCoord_new.y / y_axis );	\n"
+			"	outColor = texture( inputImageTexture, coordUse );	\n"
 			"	}	\n";
-#endif
 
 		// Load the shaders and get a linked program object
 		userData->programObject = esLoadProgram( vShaderStr, fShaderStr );
@@ -1031,8 +961,361 @@ extern "C" {
 		return TRUE;
 	}
 
+	//
+	int InitNightVision( ESContext *esContext )
+	{
+		UserData *userData = static_cast<UserData*>(esContext->userData);
+		char vShaderStr[] =
+			"#version 300 es                            \n"
+			"layout(location = 0) in vec4 position;		\n"
+			"layout(location = 1) in vec2 inputTextureCoordinate;   \n"
+			"out vec2 textureCoordinate;                \n"
+			"void main( )							\n"
+			"{										\n"
+			"	gl_Position = position;				\n"
+			"	textureCoordinate = inputTextureCoordinate;		\n"
+			"}										\n";
+		char fShaderStr[] =
+			"#version 300 es                                    \n"
+			"precision highp float;								\n"
+			"in highp vec2 textureCoordinate;					\n"
+			"layout(location = 0) out vec4 outColor;            \n"
+			"uniform sampler2D inputImageTexture;				\n"
+			//"uniform float intensity;		\n"
+			"								\n"
+			"vec3 applyNV( vec3 color )	\n"
+			"{	\n"
+			"	float intensity = 1.0;		\n"
+			"	float luma = dot( color, vec3( 0.299, 0.587, 0.114 ) );	\n"
+			"	luma = 1.0 * luma;	\n"
+			"	color *= clamp( 1.0 - intensity, 0.0, 1.0 );	\n"
+			"	luma *= intensity;	\n"
+			"		\n"
+			"	float h = 2.0 * max( luma - 0.75, 0.0 );	\n"
+			"		\n"
+			"	luma = clamp( luma, 0.0, 1.0 );	\n"
+			"		\n"
+			"	vec3 result = luma * vec3( 0.1, 0.95, 0.2 ) + vec3( h, h, h );	\n"
+			"		\n"
+			"	return color + result;	\n"
+			"}		\n"
+			"void main( ) {	\n"
+			"	outColor = texture( inputImageTexture, textureCoordinate );	\n"
+			"	outColor.rgb = applyNV(outColor.rgb);	\n"
+			"	outColor.a = 1.0;	\n"
+			"}	\n";
 
+		// Load the shaders and get a linked program object
+		userData->programObject = esLoadProgram( vShaderStr, fShaderStr );
 
+		// Get the sampler location
+		userData->baseMapLoc = glGetUniformLocation( userData->programObject, "inputImageTexture" );
+
+		// Load the textures
+		userData->baseMapTexId = LoadTextureImage( esContext->platformData, userData->image );
+
+		if (userData->baseMapTexId == 0)
+		{
+			return FALSE;
+		}
+
+		glClearColor( 1.0f, 1.0f, 1.0f, 0.0f );
+		return TRUE;
+	}
+
+	//
+	int InitGuidedFilter( ESContext *esContext )
+	{
+		UserData *userData = static_cast<UserData*>(esContext->userData);
+		char vShaderStr[] =
+			"#version 300 es                            \n"
+			"layout(location = 0) in vec4 position;		\n"
+			"layout(location = 1) in vec2 inputTextureCoordinate;   \n"
+			"const int range = 7;	\n"
+			"out vec2 textureCoordinate[15];                \n"
+			"void main( )							\n"
+			"{										\n"
+			"	gl_Position = position;				\n"
+			"	vec2 dPixel = vec2(1.0/480.0, 1.0/640.0);	\n"
+			"	for (int d = -range; d <= range; d += 1) {	\n"
+			"		textureCoordinate[range + d] = inputTextureCoordinate + float( d ) * dPixel;	\n"
+			"	}	\n"
+			"}										\n";
+		char fShaderStr[] =
+			"#version 300 es                                    \n"
+			"precision highp float;								\n"
+			"in highp vec2 textureCoordinate[15];					\n"
+			"layout(location = 0) out vec4 outColor;            \n"
+			"uniform sampler2D inputImageTexture;				\n"
+			"#define sampleCurrent(uv) texture(inputImageTexture, uv).rgb	\n"
+			"#define ADDSAMPLE(v) color = sampleCurrent(v); sum += color * color;	\n"
+			"void main( ) {	\n"
+				"vec3 color;	\n"
+				"vec2 dPixel = vec2(2.0/480.0, 2.0/640.0);	\n"
+				"vec3 sum = vec3( 0.0 );	\n"
+				"ADDSAMPLE( textureCoordinate[0] - dPixel )	\n"
+				"ADDSAMPLE( textureCoordinate[0] )	\n"
+				"ADDSAMPLE( textureCoordinate[1] )	\n"
+				"ADDSAMPLE( textureCoordinate[2] )	\n"
+				"ADDSAMPLE( textureCoordinate[3] )	\n"
+				"ADDSAMPLE( textureCoordinate[4] )	\n"
+				"ADDSAMPLE( textureCoordinate[5] )	\n"
+				"ADDSAMPLE( textureCoordinate[6] )	\n"
+				"ADDSAMPLE( textureCoordinate[7] )	\n"
+				"ADDSAMPLE( textureCoordinate[8] )	\n"
+				"ADDSAMPLE( textureCoordinate[9] )	\n"
+				"ADDSAMPLE( textureCoordinate[10] )	\n"
+				"ADDSAMPLE( textureCoordinate[11] )	\n"
+				"ADDSAMPLE( textureCoordinate[12] )	\n"
+				"ADDSAMPLE( textureCoordinate[13] )	\n"
+				"ADDSAMPLE( textureCoordinate[14] )	\n"
+				"ADDSAMPLE( textureCoordinate[14] + dPixel )	\n"
+				"	\n"
+				"outColor.rgb = sum / 17.0;	\n"
+				"outColor.a = 1.0;	\n"
+			"}	\n";
+
+		// Load the shaders and get a linked program object
+		userData->programObject = esLoadProgram( vShaderStr, fShaderStr );
+
+		// Get the sampler location
+		userData->baseMapLoc = glGetUniformLocation( userData->programObject, "inputImageTexture" );
+
+		// Load the textures
+		userData->baseMapTexId = LoadTextureImage( esContext->platformData, userData->image );
+
+		if (userData->baseMapTexId == 0)
+		{
+			return FALSE;
+		}
+
+		glClearColor( 1.0f, 1.0f, 1.0f, 0.0f );
+		return TRUE;
+	}
+	
+	//
+	int InitHighPassFilter( ESContext *esContext )
+	{
+		UserData *userData = static_cast<UserData*>(esContext->userData);
+		char vShaderStr[] =
+			"#version 300 es                            \n"
+			"layout(location = 0) in vec4 position;		\n"
+			"layout(location = 1) in vec2 inputTextureCoordinate;   \n"
+			"const int range = 1;	\n"
+			"out vec2 textureCoordinate[3];                \n"
+			"void main( )							\n"
+			"{										\n"
+			"	gl_Position = position;				\n"
+			"	vec2 dPixel = vec2(1.0/480.0, 1.0/640.0);	\n"
+			"	for (int d = -range; d <= range; d += 1) {	\n"
+			"		textureCoordinate[range + d] = inputTextureCoordinate + float( d ) * dPixel;	\n"
+			"	}	\n"
+			"}										\n";
+		char fShaderStr[] =
+			"#version 300 es                                    \n"
+			"precision highp float;								\n"
+			"in highp vec2 textureCoordinate[3];					\n"
+			"layout(location = 0) out vec4 outColor;            \n"
+			"uniform sampler2D inputImageTexture;				\n"
+			"#define sampleCurrent(uv) texture(inputImageTexture, uv).rgb	\n"
+			"#define ADDSAMPLE(v) color = sampleCurrent(v); sum += color;	\n"
+			"const float contrast = 0.8;	\n"
+			"void main( ) {	\n"
+				"vec3 color;	\n"
+				"vec3 sum = vec3( 0.0 );	\n"
+				"ADDSAMPLE( textureCoordinate[0] )	\n"
+				"ADDSAMPLE( textureCoordinate[1] )	\n"
+				"ADDSAMPLE( textureCoordinate[2] )	\n"
+				"	\n"
+				"outColor.rgb = sum / 3.0;	\n"
+				"outColor.a = 1.0;	\n"
+			"}	\n";
+
+		// Load the shaders and get a linked program object
+		userData->programObject = esLoadProgram( vShaderStr, fShaderStr );
+
+		// Get the sampler location
+		userData->baseMapLoc = glGetUniformLocation( userData->programObject, "inputImageTexture" );
+
+		// Load the textures
+		userData->baseMapTexId = LoadTextureImage( esContext->platformData, userData->image );
+
+		if (userData->baseMapTexId == 0)
+		{
+			return FALSE;
+		}
+
+		glClearColor( 1.0f, 1.0f, 1.0f, 0.0f );
+		return TRUE;
+	}
+
+	//
+	int InitLUTOpacity( ESContext *esContext )
+	{
+		UserData *userData = static_cast<UserData*>(esContext->userData);
+		char vShaderStr[] =
+			"#version 300 es                            \n"
+			"layout(location = 0) in vec4 position;		\n"
+			"layout(location = 1) in vec2 inputTextureCoordinate;   \n"
+			"const int range = 1;	\n"
+			"out vec2 textureCoordinate[3];                \n"
+			"void main( )							\n"
+			"{										\n"
+			"	gl_Position = position;				\n"
+			"	vec2 dPixel = vec2(1.0/480.0, 1.0/640.0);	\n"
+			"	for (int d = -range; d <= range; d += 1) {	\n"
+			"		textureCoordinate[range + d] = inputTextureCoordinate + float( d ) * dPixel;	\n"
+			"	}	\n"
+			"}										\n";
+		char fShaderStr[] =
+			"#version 300 es                                    \n"
+			"precision highp float;								\n"
+			"in highp vec2 textureCoordinate[3];					\n"
+			"layout(location = 0) out vec4 outColor;            \n"
+			"uniform sampler2D inputImageTexture;				\n"
+			"#define sampleCurrent(uv) texture(inputImageTexture, uv).rgb	\n"
+			"#define ADDSAMPLE(v) color = sampleCurrent(v); sum += color;	\n"
+			"const float contrast = 0.8;	\n"
+			"void main( ) {	\n"
+			"vec3 color;	\n"
+			"vec3 sum = vec3( 0.0 );	\n"
+			"ADDSAMPLE( textureCoordinate[0] )	\n"
+			"ADDSAMPLE( textureCoordinate[1] )	\n"
+			"ADDSAMPLE( textureCoordinate[2] )	\n"
+			"	\n"
+			"outColor.rgb = sum / 3.0;	\n"
+			"outColor.a = 1.0;	\n"
+			"}	\n";
+
+		// Load the shaders and get a linked program object
+		userData->programObject = esLoadProgram( vShaderStr, fShaderStr );
+
+		// Get the sampler location
+		userData->baseMapLoc = glGetUniformLocation( userData->programObject, "inputImageTexture" );
+
+		// Load the textures
+		userData->baseMapTexId = LoadTextureImage( esContext->platformData, userData->image );
+
+		if (userData->baseMapTexId == 0)
+		{
+			return FALSE;
+		}
+
+		glClearColor( 1.0f, 1.0f, 1.0f, 0.0f );
+		return TRUE;
+	}
+
+	//
+	int InitScreenEffect( ESContext *esContext )
+	{
+		UserData *userData = static_cast<UserData*>(esContext->userData);
+		char vShaderStr[] =
+			"#version 300 es                            \n"
+			"layout(location = 0) in vec4 position;		\n"
+			"layout(location = 1) in vec2 inputTextureCoordinate;   \n"
+			"out vec2 textureCoordinate;                \n"
+			"void main( )							\n"
+			"{										\n"
+			"	gl_Position = position;				\n"
+			"	textureCoordinate = inputTextureCoordinate.xy;	\n"
+			"}										\n";
+		char fShaderStr[] =
+			"#version 300 es                                    \n"
+			"precision highp float;								\n"
+			"in highp vec2 textureCoordinate;					\n"
+			"layout(location = 0) out vec4 outColor;            \n"
+			"uniform sampler2D inputImageTexture;				\n"
+			"uniform sampler2D backgroundImage;				\n"
+			"void main( ) {	\n"
+			"	vec4 foreColor;                                   \n"
+			"	vec4 backColor;                                  \n"
+			"                                                    \n"
+			"	foreColor = texture( inputImageTexture, textureCoordinate );     \n"
+			"	backColor = texture( backgroundImage, textureCoordinate );   \n"
+			//"	backColor.rgb = clamp(foreColor.rgb * backColor.rgb,0.0,1.0);	\n"	// 
+			"	outColor.rgb = mix(foreColor.rgb, backColor.rgb, backColor.a);	\n"
+			"	outColor.a = 1.0;	\n"
+			"}	\n";
+
+		// Load the shaders and get a linked program object
+		userData->programObject = esLoadProgram( vShaderStr, fShaderStr );
+
+		// Get the sampler location
+		userData->baseMapLoc = glGetUniformLocation( userData->programObject, "inputImageTexture" );
+		userData->backMapLoc = glGetUniformLocation( userData->programObject, "backgroundImage" );
+
+		// Load the textures
+		userData->baseMapTexId = LoadTextureImage( esContext->platformData, userData->image );
+		userData->backMapTexId = LoadTextureImageString( esContext->platformData, "D:\\8_resources\\opengl\\fon.png" );
+
+		if (userData->baseMapTexId == 0 || userData->backMapTexId == 0)
+		{
+			return FALSE;
+		}
+
+		glClearColor( 1.0f, 1.0f, 1.0f, 0.0f );
+		return TRUE;
+	}
+
+	//
+	int InitGlowScreenEffect( ESContext *esContext )
+	{
+		UserData *userData = static_cast<UserData*>(esContext->userData);
+		char vShaderStr[] =
+			"#version 300 es                            \n"
+			"layout(location = 0) in vec4 position;		\n"
+			"layout(location = 1) in vec2 inputTextureCoordinate;   \n"
+			"out vec2 textureCoordinate;                \n"
+			"void main( )							\n"
+			"{										\n"
+			"	gl_Position = position;				\n"
+			"	textureCoordinate = inputTextureCoordinate.xy;	\n"
+			"}										\n";
+		char fShaderStr[] =
+			"#version 300 es                                    \n"
+			"precision highp float;								\n"
+			"in highp vec2 textureCoordinate;					\n"
+			"layout(location = 0) out vec4 outColor;            \n"
+			"uniform sampler2D inputImageTexture;				\n"
+			"uniform sampler2D backgroundImage;				\n"
+			"uniform sampler2D fluidImage;					\n"
+			"uniform float uvOffset;						\n"
+			"void main( ) {	\n"
+			"	vec4 foreColor;                                   \n"
+			"	vec4 backColor;                                  \n"
+			"                                                    \n"
+			"	foreColor = texture( inputImageTexture, textureCoordinate );     \n"
+			"	backColor = texture( backgroundImage, textureCoordinate );   \n"
+			"	vec2 f_uv = vec2(textureCoordinate.x-uvOffset*sin(0.8), textureCoordinate.y+uvOffset );	\n"
+			"	vec4 fluidColor = texture(fluidImage, f_uv );	\n"
+			"	float alpha = dot(vec3(0.299,0.587,0.114), foreColor.rgb);	\n"	// 
+			"	foreColor.rgb = mix(foreColor.rgb, max(foreColor.rgb , fluidColor.rgb), alpha); \n"
+			"	outColor.rgb = mix(foreColor.rgb, backColor.rgb, 0.5);	\n"
+			"	outColor.a = 1.0;	\n"
+			"}	\n";
+
+		// Load the shaders and get a linked program object
+		userData->programObject = esLoadProgram( vShaderStr, fShaderStr );
+
+		// Get the sampler location
+		userData->baseMapLoc = glGetUniformLocation( userData->programObject, "inputImageTexture" );
+		userData->backMapLoc = glGetUniformLocation( userData->programObject, "backgroundImage" );
+		userData->fluidMapLoc = glGetUniformLocation( userData->programObject, "fluidImage" );
+		userData->fluidUvOffsetLoc = glGetUniformLocation( userData->programObject, "uvOffset" );
+
+		// Load the textures
+		userData->baseMapTexId = LoadTextureImage( esContext->platformData, userData->image );
+		userData->backMapTexId = LoadTextureImageString( esContext->platformData, "D:\\8_resources\\opengl\\glow\\glowmakeup_multiply.png" );
+		userData->fluidMapTexId = LoadTextureImageString( esContext->platformData, "D:\\8_resources\\opengl\\glow\\light2.png" );
+		
+		if (userData->baseMapTexId == 0 || userData->backMapTexId == 0)
+		{
+			return FALSE;
+		}
+
+		glClearColor( 1.0f, 1.0f, 1.0f, 0.0f );
+		return TRUE;
+	}
 	///
 	// Draw a triangle using the shader pair created in Init()
 	//
@@ -1105,7 +1388,7 @@ extern "C" {
 		}
 #endif
 		*/
-		glUniform2fv( userData->pointsLoc, 8, userData->fLoc );
+		//glUniform2fv( userData->pointsLoc, userData->fNum, userData->fLoc );
 
 		// Bind the base map
 		glActiveTexture( GL_TEXTURE0 );
@@ -1113,6 +1396,24 @@ extern "C" {
 
 		// Set the base map sampler to texture unit 0
 		glUniform1i( userData->baseMapLoc, 0 );
+
+		// Bind the back map
+		glActiveTexture( GL_TEXTURE1 );
+		glBindTexture( GL_TEXTURE_2D, userData->backMapTexId );
+		glUniform1i( userData->backMapLoc, 1 );
+
+		// Bind the fluid map
+		glActiveTexture( GL_TEXTURE2 );
+		glBindTexture( GL_TEXTURE_2D, userData->fluidMapTexId );
+		glUniform1i( userData->fluidMapLoc, 2 );
+
+		static float time = -3.1415926 / 4.0;
+		time += 0.0005;
+		if (time > 3.1415926 / 4.0) {
+			time = -3.1415926 / 4.0;
+		}
+		float offset = sin(time);
+		glUniform1f( userData->fluidUvOffsetLoc, offset );
 
 		glDrawElements( GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices );
 	}
@@ -1139,15 +1440,16 @@ extern "C" {
 	{
 		esContext->userData = malloc( sizeof( UserData ) );
 		memset( esContext->userData, 0, sizeof( UserData ) );
-		char imagefile[] = "D:\\8_resources\\opengl\\1.jpg";
+		char imagefile[] = "D:\\8_resources\\opengl\\glow\\glowmakeup_additive.png";
 		UserData* userData = static_cast<UserData*>(esContext->userData);
 		userData->image = cvLoadImage( imagefile, CV_LOAD_IMAGE_COLOR );
 		if (!userData->image) { printf( "Load image:%s failure.\n", imagefile ); getchar( ); return GL_FALSE; }
 		userData->texelHeightOffset = 2.0 / userData->image->height;
 		userData->texelWidthOffset = 2.0 / userData->image->width;
 
-		if (!userData->fLoc) { userData->fLoc = new float[2 * 25]; memset( userData->fLoc, 0, 50*sizeof( float ) ); }
-		userData->fNum = featureDetect( userData->image, userData->fLoc );
+		if (!userData->fLoc) { userData->fLoc = new float[2 * 14]; memset( userData->fLoc, 0, 28*sizeof( float ) ); }
+		//userData->fNum = featureDetect( userData->image, userData->fLoc );
+		userData->fNum = 0;
 		if (userData->fNum>0){
 			userData->scale = 0.1f;
 			userData->aspectRatio = userData->image->height * 1.0f / userData->image->width;
@@ -1156,10 +1458,24 @@ extern "C" {
 		esCreateWindow( esContext, "MultiTexture", userData->image->width, userData->image->height, ES_WINDOW_RGB );
 		//SetWindowPos( esContext->eglNativeWindow, HWND_TOP, 0, 0, image.cols, image.rows, SWP_SHOWWINDOW );
 
-		if (!InitSnakeFace( esContext ))
+#if 0
+		if (userData->fNum > 0) {
+			userData->fNum = 8;
+		}
+		if (!InitSlimFace( esContext ))
 		{
 			return GL_FALSE;
 		}
+#else
+// 		if (!InitSnakeFace( esContext ))
+// 		{
+// 			return GL_FALSE;
+// 		}
+		if (!InitGlowScreenEffect( esContext ))
+		{
+			return GL_FALSE;
+		}
+#endif
 
 		esRegisterDrawFunc( esContext, Draw );
 		esRegisterShutdownFunc( esContext, ShutDown );

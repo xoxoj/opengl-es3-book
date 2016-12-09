@@ -8,9 +8,7 @@ profile
 
 DerivedData/
 build/
-!build/*/*/*.cpp
-!build/*/*/*.h
-
+build_cmd/
 
 *.pbxuser
 *.mode1v3

@@ -1,8 +1,27 @@
 cmake_minimum_required( VERSION 2.6 )
 project( ES3_Book )
 
+# External 
 include_directories( External/Include )
+
+# Common
 include_directories( Common/Include )
+
+# Opencv
+set(OPENCV_DIR "D:/OpenCV/opencv/build" CACHE STRING "opencv path" FORCE)
+set(OPENCV_INCLUDE_DIR ${OPENCV_DIR}/include
+					   ${OPENCV_DIR}/include/opencv
+					   ${OPENCV_DIR}/include/opencv2
+					   CACHE STRING "opencv include path." FORCE)
+set(OPENCV_LIB_DIR ${OPENCV_DIR}/x64/vc14/lib CACHE STRING "opencv libs path." FORCE)
+set(OPENCV_DLL_DIR ${OPENCV_DIR}/x64/vc14/bin CACHE STRING "opencv dlls path." FORCE)
+
+# Visage
+set(VISAGE_DIR "D:/Visage/Visage Technologies 8.1/visageSDK" CACHE STRING "opencv path" FORCE)
+set(VISAGE_INCLUDE_DIR ${VISAGE_DIR}/include
+					   CACHE STRING "opencv include path." FORCE)
+set(VISAGE_LIB_DIR ${VISAGE_DIR}/lib CACHE STRING "opencv libs path." FORCE)
+set(VISAGE_DLL_DIR ${VISAGE_DIR}/bin CACHE STRING "opencv dlls path." FORCE)
 
 find_library( OPENGLES3_LIBRARY 
 				GLESv2

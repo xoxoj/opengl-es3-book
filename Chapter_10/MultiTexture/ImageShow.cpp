@@ -43,6 +43,27 @@
 #include <VisageFeaturesDetector.h>
 #include <iostream>
 #include <math.h>
+#include <windows.h>
+
+LARGE_INTEGER litmp;
+LONGLONG qt1, qt2;
+double dftime, dffreq, dftick;
+
+#define NO_IMPL			1
+#define GPUIMAGE_IMPL	2
+#define FACEU_IMPL		3
+
+#define FSHADER_IMPL FACEU_IMPL
+
+enum BEAUTY { FISRT = 1, SECOND, THIRD, FORTH, FIFTH };
+
+#define DETECT_FEATURE_POINT 1
+#define DRAW_SUPER_BEAUTIFY 0
+#define DRAW_MY_DARKQUEEN 0
+#define DRAW_SNAKE_FACE 0
+#define DRAW_GLOW_EFFECT 0
+#define DRAW_BIGEYE_EFFECT 0
+#define DRAW_SLIM_FACE 1
 
 using namespace VisageSDK;
 namespace VisageSDK
@@ -115,20 +136,16 @@ int featureDetect( IplImage *image, float* fLoc ) {
 			if (fp->defined) { fLoc[i+4] = fp->pos[0]; fLoc[i+5] = 1 - fp->pos[1]; }
 			else { fLoc[i+4] = 0.0f; fLoc[i+5] = 0.0f; }
 		}
+		FILE *pf_save_points = fopen( "D:\\8_resources\\opengl\\points.txt", "w+" );
 		for (int i = 0; i < num+4; ++i, ++i) {
 			printf( "x = %.6f, y = %.6f.\n", fLoc[i], fLoc[i + 1] );
+			fprintf( pf_save_points, "points[%d] = %.6ff; points[%d] = %.6ff;\n", i, fLoc[i], i + 1, fLoc[i + 1] );
 		}
+		fclose( pf_save_points );
+
 	}
 	delete detector_; detector_ = 0; return fNum;
 }
-
-#define NO_IMPL			1
-#define GPUIMAGE_IMPL	2
-#define FACEU_IMPL		3
-
-#define FSHADER_IMPL FACEU_IMPL
-
-enum BEAUTY{ FISRT=1,SECOND,THIRD,FORTH,FIFTH};
 
 extern "C" {
 	typedef struct
@@ -167,6 +184,11 @@ extern "C" {
 		GLfloat scale;
 		GLfloat aspectRatio;
 		GLint	pointsLoc;
+
+		// super beautify
+		GLint mSingleStepOffsetLoc;
+		GLint mParamsLoc;
+		GLint mBrightnessLoc;
 
 	} UserData;
 
@@ -562,6 +584,167 @@ extern "C" {
 		return TRUE;
 	}
 
+	//
+	int InitSuperBeautify( ESContext *esContext )
+	{
+		UserData *userData = static_cast<UserData*>(esContext->userData);
+		char vShaderStr[] =
+			"#version 300 es                            \n"
+			"layout(location = 0) in vec4 a_position;   \n"
+			"layout(location = 1) in vec2 a_texCoord;   \n"
+			"out vec2 textureCoordinate;                \n"
+			"void main( )							\n"
+			"{										\n"
+			"	gl_Position = a_position;			\n"
+			"	textureCoordinate = a_texCoord;		\n"
+			"}										\n";
+
+		char fShaderStr[] =
+			"#version 300 es                                    \n"
+			"precision highp float;   												\n"
+			"out vec4 outColor;									\n"
+			"in vec2 textureCoordinate;    								\n"
+			"uniform sampler2D  inputImageTexture; 									\n"
+			"uniform  vec2  singleStepOffset; 									\n"
+			"uniform  vec4  params;  											\n"
+			"uniform  float brightness;  										\n"
+			"const  mat3 saturateMatrix = mat3(1.1102, -0.0598, -0.061,-0.0774, 1.0826, -0.1186,-0.0228, -0.0228, 1.1772);  \n"
+			"const  vec3 W = vec3(0.299, 0.587, 0.114);  						\n"
+			"vec2 blurCoordinates[24];  										\n"
+
+			"float hardLight(float color){ \n"
+			"	return (color<=0.5) ? (color*color*2.0): (1.0 - ((1.0 - color)*(1.0 - color) * 2.0));     \n"
+			"}		\n"
+
+			"float sum;																\n"
+			"float gaussianWeightTotal;												\n"
+			"float central;															\n"
+			"const float distanceNormalizationFactor = 4.0;   						\n"
+			"void GaussColorSampler(vec2 uv, float coef) { 							\n"
+			"	float sampleColor = texture( inputImageTexture, uv ).g;					\n"
+			"   float distanceFromCentralColor = min( abs( central - sampleColor ) * distanceNormalizationFactor, 1.0 );		\n"
+			"   float gaussianWeight = coef * (1.0 - distanceFromCentralColor);												\n"
+			"   gaussianWeightTotal += gaussianWeight;																	\n"
+			"   sum += sampleColor * gaussianWeight; 																	\n"
+			"}	\n"
+
+			"void main(){ 																			\n"
+			/*"	vec3 centralColor = texture(inputImageTexture, textureCoordinate).rgb;  		\n"
+			"	vec2 textureCoord = vec2(textureCoordinate.xy);   								\n"
+			"	blurCoordinates[0] = textureCoord + singleStepOffset * vec2(0.0, -10.0);  		\n"
+			"	blurCoordinates[1] = textureCoord + singleStepOffset * vec2(0.0, 10.0);  		\n"
+			"	blurCoordinates[2] = textureCoord + singleStepOffset * vec2(-10.0, 0.0);  		\n"
+			"	blurCoordinates[3] = textureCoord + singleStepOffset * vec2(10.0, 0.0);  		\n"
+			"	blurCoordinates[4] = textureCoord + singleStepOffset * vec2(5.0, -8.0);  		\n"
+			"	blurCoordinates[5] = textureCoord + singleStepOffset * vec2(5.0, 8.0);  		\n"
+			"	blurCoordinates[6] = textureCoord + singleStepOffset * vec2(-5.0, 8.0);  		\n"
+			"	blurCoordinates[7] = textureCoord + singleStepOffset * vec2(-5.0, -8.0);  		\n"
+			"	blurCoordinates[8] = textureCoord + singleStepOffset * vec2(8.0, -5.0);  		\n"
+			"	blurCoordinates[9] = textureCoord + singleStepOffset * vec2(8.0, 5.0);  		\n"
+			"	blurCoordinates[10] = textureCoord + singleStepOffset * vec2(-8.0, 5.0);  		\n"
+			"	blurCoordinates[11] = textureCoord + singleStepOffset * vec2(-8.0, -5.0);  		\n"
+			"	blurCoordinates[12] = textureCoord + singleStepOffset * vec2(0.0, -6.0);  		\n"
+			"	blurCoordinates[13] = textureCoord + singleStepOffset * vec2(0.0, 6.0);  		\n"
+			"	blurCoordinates[14] = textureCoord + singleStepOffset * vec2(6.0, 0.0);  		\n"
+			"	blurCoordinates[15] = textureCoord + singleStepOffset * vec2(-6.0, 0.0);  		\n"
+			"	blurCoordinates[16] = textureCoord + singleStepOffset * vec2(-4.0, -4.0);  		\n"
+			"	blurCoordinates[17] = textureCoord + singleStepOffset * vec2(-4.0, 4.0);  		\n"
+			"	blurCoordinates[18] = textureCoord + singleStepOffset * vec2(4.0, -4.0);  		\n"
+			"	blurCoordinates[19] = textureCoord + singleStepOffset * vec2(4.0, 4.0);  		\n"
+			"	blurCoordinates[20] = textureCoord + singleStepOffset * vec2(-2.0, -2.0);  		\n"
+			"	blurCoordinates[21] = textureCoord + singleStepOffset * vec2(-2.0, 2.0);  		\n"
+			"	blurCoordinates[22] = textureCoord + singleStepOffset * vec2(2.0, -2.0);  		\n"
+			"	blurCoordinates[23] = textureCoord + singleStepOffset * vec2(2.0, 2.0);  		\n"
+
+			"	central = texture( inputImageTexture, textureCoordinate ).g;	\n"
+			"	gaussianWeightTotal = 0.2;										\n"
+			"	sum = central * 0.2;											\n"
+			"																	\n"
+			"	GaussColorSampler(blurCoordinates[0],0.05); 	\n"
+			"	GaussColorSampler(blurCoordinates[1],0.05); 	\n"
+			"	GaussColorSampler(blurCoordinates[2],0.05); 	\n"
+			"	GaussColorSampler(blurCoordinates[3],0.05); 	\n"
+			"	GaussColorSampler(blurCoordinates[4],0.05); 	\n"
+			"	GaussColorSampler(blurCoordinates[5],0.05); 	\n"
+			"	GaussColorSampler(blurCoordinates[6],0.05); 	\n"
+			"	GaussColorSampler(blurCoordinates[7],0.05); 	\n"
+			"	GaussColorSampler(blurCoordinates[8],0.05); 	\n"
+			"	GaussColorSampler(blurCoordinates[9],0.05); 	\n"
+			"	GaussColorSampler(blurCoordinates[10],0.05); \n"
+			"	GaussColorSampler(blurCoordinates[11],0.05); \n"
+
+			"	GaussColorSampler(blurCoordinates[12],0.1); \n"
+			"	GaussColorSampler(blurCoordinates[13],0.1); \n"
+			"	GaussColorSampler(blurCoordinates[14],0.1); \n"
+			"	GaussColorSampler(blurCoordinates[15],0.1); \n"
+			"	GaussColorSampler(blurCoordinates[16],0.1); \n"
+			"	GaussColorSampler(blurCoordinates[17],0.1); \n"
+			"	GaussColorSampler(blurCoordinates[18],0.1); \n"
+			"	GaussColorSampler(blurCoordinates[19],0.1); \n"
+
+			"	GaussColorSampler(blurCoordinates[20],0.15); \n"
+			"	GaussColorSampler(blurCoordinates[21],0.15); \n"
+			"	GaussColorSampler(blurCoordinates[22],0.15); \n"
+			"	GaussColorSampler(blurCoordinates[23],0.15); \n"
+
+			"	sum = sum / gaussianWeightTotal;			\n"
+
+			"	float highPass = centralColor.g - sum + 0.5;  \n"
+			"	highPass = hardLight(highPass);  			\n"
+			"	highPass = hardLight(highPass);  			\n"
+			"	highPass = hardLight(highPass);  			\n"
+			"	highPass = hardLight(highPass);  			\n"
+			"	highPass = hardLight(highPass);  			\n"
+
+			"	float luminance = dot(centralColor, W);  \n"
+			"	float alpha = pow(luminance, params.r);  \n"
+			"	vec3 smoothColor = centralColor + (centralColor-vec3(highPass))*alpha*0.1;  											\n"
+
+			"	smoothColor.r = clamp(pow(smoothColor.r, params.g), 0.0, 1.0);  															\n"
+			"	smoothColor.g = clamp(pow(smoothColor.g, params.g), 0.0, 1.0);  															\n"
+			"	smoothColor.b = clamp(pow(smoothColor.b, params.g), 0.0, 1.0);  															\n"
+
+			"	vec3 lvse = vec3(1.0)-(vec3(1.0)-smoothColor)*(vec3(1.0)-centralColor);  												\n"
+			"	vec3 bianliang = max(smoothColor, centralColor);  																		\n"
+			"	vec3 rouguang = 2.0*centralColor*smoothColor + centralColor*centralColor - 2.0*centralColor*centralColor*smoothColor;  \n"
+
+			"	outColor = vec4(mix(centralColor, lvse, alpha), 1.0);  															\n"
+			"	outColor.rgb = mix(outColor.rgb, bianliang, alpha);  																		\n"
+			"	outColor.rgb = mix(outColor.rgb, rouguang, params.b);  																		\n"
+
+			"	vec3 satcolor = centralColor.rgb * saturateMatrix;  																		\n"
+			"	outColor.rgb = mix(outColor.rgb, satcolor, params.a);  																		\n"
+			"	outColor.rgb = vec3(outColor.rgb + vec3(brightness));  																		\n"
+			*/
+			"	outColor.rgb = texture(inputImageTexture, textureCoordinate).rgb; \n"
+			"	outColor.a = 1.0; \n"
+			"}  ";
+
+
+		// Load the shaders and get a linked program object
+		userData->programObject = esLoadProgram( vShaderStr, fShaderStr );
+
+		// Get the sampler location
+		userData->baseMapLoc = glGetUniformLocation( userData->programObject, "inputImageTexture" );
+
+		userData->mSingleStepOffsetLoc = glGetUniformLocation( userData->programObject, "singleStepOffset" );
+		userData->mParamsLoc = glGetUniformLocation( userData->programObject, "params" );
+		userData->mBrightnessLoc = glGetUniformLocation( userData->programObject, "brightness" );
+
+
+		// Load the textures
+		userData->baseMapTexId = LoadTextureImage( esContext->platformData, userData->image );
+		userData->texelHeightOffset = 2.0 / userData->image->height;
+		userData->texelWidthOffset = 2.0 / userData->image->width;
+
+		if (userData->baseMapTexId == 0)
+		{
+			return FALSE;
+		}
+
+		glClearColor( 1.0f, 1.0f, 1.0f, 0.0f );
+		return TRUE;
+	}
 	/*
 	* Init bigeye and slimface
 	*/
@@ -578,48 +761,6 @@ extern "C" {
 			"	gl_Position = position;				\n"
 			"	textureCoordinate = inputTextureCoordinate;		\n"
 			"}										\n";
-#if 0
-		char fShaderStr[] =
-			"#version 300 es                                    \n"
-			"precision highp float;								\n"
-			"in highp vec2 textureCoordinate;					\n"
-			"layout(location = 0) out vec4 outColor;            \n"
-			"uniform sampler2D inputImageTexture;				\n"
-			"								\n"
-			"uniform lowp vec2 location4;	\n"
-			"uniform lowp vec2 location5;	\n"
-			"								\n"
-			"const highp vec2 p_eyea = location4;		\n"
-			"const highp vec2 p_eyeb = location5;		\n"
-			"								\n"
-			"#define x_a 0.60				\n"
-			"#define y_a 0.45				\n"
-			"								\n"
-			"void main( ){					\n"
-			"	vec2 newCoord = vec2( textureCoordinate.x*x_a, textureCoordinate.y*y_a );	\n"
-			"	vec2 eyea = vec2( p_eyea.x * x_a, p_eyea.y * y_a );			\n"
-			"	vec2 eyeb = vec2( p_eyeb.x * x_a, p_eyeb.y * y_a );			\n"
-			"	float weight = 0.0;								\n"
-			"	float face_width = distance( eyea, eyeb );		\n"
-			"													\n"
-			"	// eye1											\n"
-			"	float eyeRadius = face_width*0.27;				\n"
-			"	float dis_eye1 = distance( newCoord, eyea );	\n"
-			"	if (dis_eye1 <= eyeRadius){						\n"
-			"		weight = pow( dis_eye1 / eyeRadius, 0.05 );	\n"
-			"		newCoord = eyea + (newCoord - eyea)*weight;	\n"
-			"	}												\n"
-			"	// eye2											\n"
-			"	float dis_eye2 = distance( newCoord, eyeb );	\n"
-			"	if (dis_eye2 <= eyeRadius){						\n"
-			"		weight = pow( dis_eye2 / eyeRadius, 0.05 );	\n"
-			"		newCoord = eyeb + (newCoord - eyeb)*weight;	\n"
-			"	}												\n"
-			"																\n"
-			"	newCoord = vec2( newCoord.x / x_a, newCoord.y / y_a );		\n"
-			"	outColor = texture( inputImageTexture, newCoord );		\n"
-			"}																\n";
-#else
 		char fShaderStr[] =
 			"#version 300 es                                    \n"
 			"precision highp float;								\n"
@@ -634,9 +775,9 @@ extern "C" {
 			"uniform highp float scale; 		\n"
 			"								\n"
 			"void main( ){					\n"
-			"	vec2 textureCoordinateToUse = vec2( textureCoordinate.x, (textureCoordinate.y * aspectRatio + 0.5 - 0.5 * aspectRatio) );	\n"
-			"	vec2 eyea = vec2( p_eyea.x, (p_eyea.y * aspectRatio + 0.5 - 0.5 * aspectRatio) );			\n"
-			"	vec2 eyeb = vec2( p_eyeb.x, (p_eyeb.y * aspectRatio + 0.5 - 0.5 * aspectRatio) );			\n"
+			"	vec2 textureCoordinateToUse = vec2( textureCoordinate.x, (textureCoordinate.y * aspectRatio ) );	\n"
+			"	vec2 eyea = vec2( p_eyea.x, (p_eyea.y * aspectRatio ) );			\n"
+			"	vec2 eyeb = vec2( p_eyeb.x, (p_eyeb.y * aspectRatio ) );			\n"
 			"	float face_width = distance( eyea, eyeb );		\n"
 			"													\n"
 			"	// eye1											\n"
@@ -662,9 +803,6 @@ extern "C" {
 			"																\n"
 			"	outColor = texture( inputImageTexture, textureCoordinateToUse );		\n"
 			"}																\n";
-#endif
-
-
 
 		// Load the shaders and get a linked program object
 		userData->programObject = esLoadProgram( vShaderStr, fShaderStr );
@@ -1351,44 +1489,6 @@ extern "C" {
 
 		glEnableVertexAttribArray( 0 );
 		glEnableVertexAttribArray( 1 );
-		/*
-		//
-#if FSHADER_IMPL == GPUIMAGE_IMPL
-		glUniform1f( userData->texelWidthOffsetLoc, userData->texelWidthOffset );
-		glUniform1f( userData->texelHeightOffsetLoc, userData->texelHeightOffset );
-#elif FSHADER_IMPL == FACEU_IMPL
-		BEAUTY beautyType = BEAUTY::FISRT;
-		switch (beautyType)
-		{
-		case BEAUTY::FISRT:
-			glUniform1i( userData->iternumLoc, 2 );
-			glUniform1f( userData->aa_coefLoc, 0.19 );
-			glUniform1f( userData->mixcoefLoc, 0.54 );
-			break;
-		case BEAUTY::SECOND:
-			glUniform1i( userData->iternumLoc, 2 );
-			glUniform1f( userData->aa_coefLoc, 0.25 );
-			glUniform1f( userData->mixcoefLoc, 0.54 );
-			break;
-		case BEAUTY::THIRD:
-			glUniform1i( userData->iternumLoc, 3 );
-			glUniform1f( userData->aa_coefLoc, 0.17 );
-			glUniform1f( userData->mixcoefLoc, 0.39 );
-			break;
-		case BEAUTY::FORTH:
-			glUniform1i( userData->iternumLoc, 4 );
-			glUniform1f( userData->aa_coefLoc, 0.13 );
-			glUniform1f( userData->mixcoefLoc, 0.54 );
-			break;
-		case BEAUTY::FIFTH:
-			glUniform1i( userData->iternumLoc, 4 );
-			glUniform1f( userData->aa_coefLoc, 0.19 );
-			glUniform1f( userData->mixcoefLoc, 0.69 );
-			break;
-		}
-#endif
-		*/
-		//glUniform2fv( userData->pointsLoc, userData->fNum, userData->fLoc );
 
 		// Bind the base map
 		glActiveTexture( GL_TEXTURE0 );
@@ -1397,6 +1497,49 @@ extern "C" {
 		// Set the base map sampler to texture unit 0
 		glUniform1i( userData->baseMapLoc, 0 );
 
+#if DRAW_BIGEYE_EFFECT
+		glUniform2fv( userData->location4Loc, 1, userData->fLoc );
+		glUniform2fv( userData->location5Loc, 1, userData->fLoc + 2 );
+		glUniform1f( userData->aspectRatioLoc, userData->aspectRatio );
+		glUniform1f( userData->scaleLoc, userData->scale );
+#endif
+
+#if DRAW_SLIM_FACE
+		glUniform2fv( userData->pointsLoc, 8, userData->fLoc );
+#endif
+
+#if DRAW_SNAKE_FACE
+		glUniform2fv( userData->pointsLoc, userData->fNum, userData->fLoc );
+#endif
+
+#if DRAW_SUPER_BEAUTIFY
+		float *singleOffset = new float[2];
+		singleOffset[0] = userData->texelWidthOffset;
+		singleOffset[1] = userData->texelHeightOffset;
+		glUniform2fv( userData->mSingleStepOffsetLoc, 1, singleOffset );
+		delete[] singleOffset;
+		float brightness = 0.1 / 20.0;
+		glUniform1f( userData->mBrightnessLoc, brightness );
+		float* params = new float[4];
+		float beautyLevel = 0.8;
+		float toneLevel = 0.5;
+		params[0] = 1.0f - 0.9f * beautyLevel;
+		params[1] = 1.0f - 0.5f * beautyLevel;
+		params[2] = 0.1f + 0.5f * toneLevel;
+		params[3] = 0.1f + 0.1f * toneLevel;
+		glUniform4fv( userData->mParamsLoc, 1, params );
+		delete[] params;
+#endif
+
+#if DRAW_MY_DARKQUEEN
+		// Bind the back map
+		glActiveTexture( GL_TEXTURE1 );
+		glBindTexture( GL_TEXTURE_2D, userData->backMapTexId );
+		glUniform1i( userData->backMapLoc, 1 );
+#endif
+
+
+#if	DRAW_GLOW_EFFECT
 		// Bind the back map
 		glActiveTexture( GL_TEXTURE1 );
 		glBindTexture( GL_TEXTURE_2D, userData->backMapTexId );
@@ -1408,14 +1551,29 @@ extern "C" {
 		glUniform1i( userData->fluidMapLoc, 2 );
 
 		static float time = -3.1415926 / 4.0;
-		time += 0.0005;
+		time += 0.0003;
 		if (time > 3.1415926 / 4.0) {
 			time = -3.1415926 / 4.0;
 		}
 		float offset = sin(time);
 		glUniform1f( userData->fluidUvOffsetLoc, offset );
+#endif
+
+		QueryPerformanceFrequency( &litmp );//获得时钟频率
+		dffreq = (double)litmp.QuadPart;
+
+		QueryPerformanceCounter( &litmp );//获得起始值
+		qt1 = litmp.QuadPart;
 
 		glDrawElements( GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices );
+
+		//glFinish( );
+
+		QueryPerformanceCounter( &litmp );//获得终止值
+		qt2 = litmp.QuadPart;
+		dftick = (double)(qt2 - qt1);		// 获得差值
+		dftime = (double)dftick / dffreq * 1000;//获得对应的时间值（毫秒）
+		printf( "time: %.3f\n", dftime );
 	}
 
 	///
@@ -1440,37 +1598,80 @@ extern "C" {
 	{
 		esContext->userData = malloc( sizeof( UserData ) );
 		memset( esContext->userData, 0, sizeof( UserData ) );
+#if DRAW_GLOW_EFFECT
 		char imagefile[] = "D:\\8_resources\\opengl\\glow\\glowmakeup_additive.png";
+#else
+		char imagefile[] = "D:\\8_resources\\opengl\\1.jpg";
+#endif
 		UserData* userData = static_cast<UserData*>(esContext->userData);
 		userData->image = cvLoadImage( imagefile, CV_LOAD_IMAGE_COLOR );
 		if (!userData->image) { printf( "Load image:%s failure.\n", imagefile ); getchar( ); return GL_FALSE; }
 		userData->texelHeightOffset = 2.0 / userData->image->height;
 		userData->texelWidthOffset = 2.0 / userData->image->width;
 
+		cvShowImage( "test", userData->image ); cvWaitKey( 10 );
 		if (!userData->fLoc) { userData->fLoc = new float[2 * 14]; memset( userData->fLoc, 0, 28*sizeof( float ) ); }
-		//userData->fNum = featureDetect( userData->image, userData->fLoc );
+#if DETECT_FEATURE_POINT
+		userData->fNum = featureDetect( userData->image, userData->fLoc );
+#else
 		userData->fNum = 0;
-		if (userData->fNum>0){
-			userData->scale = 0.1f;
-			userData->aspectRatio = userData->image->height * 1.0f / userData->image->width;
-		}
-
-		esCreateWindow( esContext, "MultiTexture", userData->image->width, userData->image->height, ES_WINDOW_RGB );
-		//SetWindowPos( esContext->eglNativeWindow, HWND_TOP, 0, 0, image.cols, image.rows, SWP_SHOWWINDOW );
+#endif
 
 #if 0
-		if (userData->fNum > 0) {
-			userData->fNum = 8;
+		int width = 480;
+		int height = int(width*( userData->image->height*1.0f / userData->image->width ));
+#else
+		int width = userData->image->width;
+		int height = userData->image->height;
+#endif
+
+		if (userData->fNum>0){
+			userData->scale = 0.3f;
+			userData->aspectRatio = height * 1.0f / width;
 		}
+
+		esCreateWindow( esContext, "MultiTexture", width, height, ES_WINDOW_RGB );
+		//SetWindowPos( esContext->eglNativeWindow, HWND_TOP, 0, 0, image.cols, image.rows, SWP_SHOWWINDOW );
+
+#if DRAW_SUPER_BEAUTIFY
+		if (userData->fNum > 0) {
+			userData->fNum = 14;
+		}
+		if (!InitSuperBeautify( esContext ))
+		{
+			return GL_FALSE;
+		}
+#endif
+
+#if DRAW_BIGEYE_EFFECT
+		if (!InitBigEye( esContext ))
+		{
+			return GL_FALSE;
+		}
+#endif
+
+#if DRAW_SLIM_FACE
 		if (!InitSlimFace( esContext ))
 		{
 			return GL_FALSE;
 		}
-#else
-// 		if (!InitSnakeFace( esContext ))
-// 		{
-// 			return GL_FALSE;
-// 		}
+#endif
+
+#if DRAW_SNAKE_FACE
+		if (!InitSnakeFace( esContext ))
+		{
+			return GL_FALSE;
+		}
+#endif
+
+#if DRAW_MY_DARKQUEEN
+		if (!InitScreenEffect( esContext ))
+		{
+			return GL_FALSE;
+		}
+#endif
+
+#if DRAW_GLOW_EFFECT
 		if (!InitGlowScreenEffect( esContext ))
 		{
 			return GL_FALSE;
